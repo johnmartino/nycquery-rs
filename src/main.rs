@@ -168,12 +168,12 @@ async fn extract_search_terms(client: &Client, prompt: &str) -> anyhow::Result<V
         .collect())
 }
 
-// Step 2: pick the single best article from title + body content
+// Pick and rank the top 5 articles from title + body content
 async fn select_best(
     client: &Client,
     prompt: &str,
     enriched: &[(Article, String)],
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Vec<String>> {
     let article_text = enriched
         .iter()
         .map(|(a, body)| format!("{} — {}\n{}", a.id, a.title, body))
@@ -183,7 +183,8 @@ async fn select_best(
     let user_message = format!(
         "Resident complaint: \"{prompt}\"\n\n\
          {article_text}\n\n\
-         Reply with ONLY the single KA identifier that best matches the complaint. No other text."
+         Reply with ONLY the top 5 KA identifiers that best match the complaint, best match first, \
+         one per line. No other text."
     );
 
     let resp = client
@@ -191,12 +192,14 @@ async fn select_best(
         .json(&json!({
             "model": OLLAMA_MODEL,
             "stream": false,
+            "temperature": 0,
             "messages": [
                 {
                     "role": "system",
                     "content": "You are a precise NYC 311 classifier. \
                                 When given knowledge articles and a resident's complaint, \
-                                reply with exactly one KA identifier and nothing else."
+                                reply with the top 5 KA identifiers ranked best match first, \
+                                one per line, nothing else."
                 },
                 { "role": "user", "content": user_message }
             ]
@@ -210,13 +213,16 @@ async fn select_best(
         anyhow::bail!("{}", err);
     }
 
-    Ok(resp["choices"][0]["message"]["content"]
+    let content = resp["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
-        .to_string())
+        .to_string();
+
+    let ka_re = Regex::new(r"KA-\d+").unwrap();
+    Ok(ka_re.find_iter(&content).map(|m| m.as_str().to_string()).take(5).collect())
 }
 
-async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<String> {
+async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<Vec<(String, String)>> {
     // Fetch all article titles and extract search terms in parallel
     let (articles_result, terms_result) = tokio::join!(
         fetch_all_articles(client),
@@ -249,9 +255,21 @@ async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<String> {
         bodies.push(h.await.unwrap_or_default());
     }
 
-    // LLM picks the single best from title + body
+    // LLM ranks top 5 from title + body
     let enriched: Vec<(Article, String)> = top.into_iter().zip(bodies).collect();
-    select_best(client, prompt, &enriched).await
+    let title_map: HashMap<String, String> = enriched
+        .iter()
+        .map(|(a, _)| (a.id.clone(), a.title.clone()))
+        .collect();
+
+    let ids = select_best(client, prompt, &enriched).await?;
+    Ok(ids
+        .into_iter()
+        .map(|id| {
+            let title = title_map.get(&id).cloned().unwrap_or_default();
+            (id, title)
+        })
+        .collect())
 }
 
 // --- Open article URL ---
@@ -303,16 +321,16 @@ async fn main() {
     spinner.start("Thinking");
 
     match run_session(&client, &prompt).await {
-        Ok(content) => {
+        Ok(results) => {
             spinner.stop();
-            let ka_re = Regex::new(r"KA-\d+").unwrap();
-            if let Some(m) = ka_re.find(&content) {
-                let ka = m.as_str();
-                println!("{ka}");
-                open_article(ka);
-            } else {
-                println!("{content}");
+            if results.is_empty() {
+                eprintln!("No results found.");
+                std::process::exit(1);
             }
+            for (ka, title) in &results {
+                println!("{ka} — {title}");
+            }
+            open_article(&results[0].0);
         }
         Err(e) => {
             spinner.stop();
