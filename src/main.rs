@@ -64,13 +64,9 @@ struct Article {
     title: String,
 }
 
-// --- Fetch and rank NYC 311 articles ---
+// --- Fetch all NYC 311 article titles ---
 
-async fn fetch_nyc_knowledge_article(
-    client: &Client,
-    issue: &str,
-    alternative_phrasings: &[String],
-) -> anyhow::Result<String> {
+async fn fetch_all_articles(client: &Client) -> anyhow::Result<Vec<Article>> {
     let html = client
         .get("https://portal.311.nyc.gov/all-articles/")
         .send()
@@ -87,13 +83,9 @@ async fn fetch_nyc_knowledge_article(
         let href = el.value().attr("href").unwrap_or("");
         let title: String = el.text().collect::<Vec<_>>().join(" ").trim().to_string();
         let Some(m) = ka_re.find(href) else { continue };
-        articles.push(Article {
-            id: m.as_str().to_string(),
-            title,
-        });
+        articles.push(Article { id: m.as_str().to_string(), title });
     }
 
-    // Dedupe by KA ID, preferring entries with a non-empty title
     let mut by_id: HashMap<String, Article> = HashMap::new();
     for a in articles {
         let entry = by_id.entry(a.id.clone()).or_insert_with(|| a.clone());
@@ -106,80 +98,92 @@ async fn fetch_nyc_knowledge_article(
         .iter()
         .copied()
         .collect();
-    let mut candidates: Vec<Article> = by_id
+
+    Ok(by_id
         .into_values()
-        .filter(|a| {
-            !a.title.is_empty()
-                && a.title.len() > 6
-                && !generic.contains(a.title.trim())
-        })
-        .collect();
-
-    // Rank by word-overlap score (substitute for NLEmbedding)
-    let queries: Vec<String> = std::iter::once(issue.to_string())
-        .chain(alternative_phrasings.iter().cloned())
-        .map(|q| q.to_lowercase())
-        .collect();
-
-    candidates.sort_by_key(|a| {
-        let context = a.title.to_lowercase();
-        let score: usize = queries
-            .iter()
-            .map(|q| {
-                q.split_whitespace()
-                    .filter(|w| context.contains(*w))
-                    .count()
-            })
-            .sum();
-        Reverse(score)
-    });
-
-    let top: Vec<&Article> = candidates.iter().take(20).collect();
-    Ok(top
-        .iter()
-        .map(|a| format!("{} — {}", a.id, a.title))
-        .collect::<Vec<_>>()
-        .join("\n"))
+        .filter(|a| !a.title.is_empty() && a.title.len() > 6 && !generic.contains(a.title.trim()))
+        .collect())
 }
 
-// --- Ollama API (simple two-step: fetch articles, then ask model to pick) ---
+// --- Fetch article body ---
+
+async fn fetch_article_body(client: &Client, ka_id: &str) -> String {
+    let url = format!("https://portal.311.nyc.gov/article/?kanumber={ka_id}");
+    let Ok(resp) = client.get(&url).send().await else { return String::new() };
+    let Ok(html) = resp.text().await else { return String::new() };
+    let doc = Html::parse_document(&html);
+    let sel = Selector::parse("p").unwrap();
+    let text: String = doc
+        .select(&sel)
+        .map(|el| el.text().collect::<String>())
+        .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|s| s.len() > 30)
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ");
+    text.chars().take(600).collect()
+}
+
+// --- Ollama API ---
 
 const OLLAMA_URL: &str = "http://localhost:11434/v1/chat/completions";
-const OLLAMA_MODEL: &str = "llama3.2";
+const OLLAMA_MODEL: &str = "llama3.1:8b";
 
-/// Generate naive alternative phrasings from the raw prompt by pulling
-/// meaningful words out — good enough to improve the keyword-ranking step.
-fn naive_phrasings(prompt: &str) -> Vec<String> {
-    let stopwords = ["i", "my", "the", "a", "an", "is", "are", "was", "has",
-                     "have", "been", "not", "out", "in", "on", "at", "to",
-                     "for", "of", "and", "or", "it", "its", "there", "from"];
-    let words: Vec<&str> = prompt
-        .split_whitespace()
-        .filter(|w| !stopwords.contains(&w.to_lowercase().as_str()) && w.len() > 2)
-        .collect();
-    // Pairs and the full condensed phrase
-    let mut phrasings: Vec<String> = words
-        .windows(2)
-        .map(|w| w.join(" "))
-        .collect();
-    if words.len() > 2 {
-        phrasings.push(words.join(" "));
+// Step 1: translate the complaint into English 311-style search terms
+async fn extract_search_terms(client: &Client, prompt: &str) -> anyhow::Result<Vec<String>> {
+    let resp = client
+        .post(OLLAMA_URL)
+        .json(&json!({
+            "model": OLLAMA_MODEL,
+            "stream": false,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a NYC 311 classifier assistant. \
+                                Given a resident complaint in any language, reply with 3-5 English \
+                                words or short phrases that would appear in the title of the correct \
+                                NYC 311 service article. Space-separated, lowercase, no other text."
+                },
+                { "role": "user", "content": prompt }
+            ]
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+
+    if let Some(err) = resp.get("error") {
+        anyhow::bail!("{}", err);
     }
-    phrasings.into_iter().take(3).collect()
+
+    let content = resp["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    Ok(content
+        .split_whitespace()
+        .map(|s| s.to_lowercase())
+        .filter(|s| s.len() > 2)
+        .collect())
 }
 
-async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<String> {
-    // Step 1: fetch and rank articles locally — no LLM needed for this
-    let phrasings = naive_phrasings(prompt);
-    let articles = fetch_nyc_knowledge_article(client, prompt, &phrasings).await?;
+// Step 2: pick the single best article from title + body content
+async fn select_best(
+    client: &Client,
+    prompt: &str,
+    enriched: &[(Article, String)],
+) -> anyhow::Result<String> {
+    let article_text = enriched
+        .iter()
+        .map(|(a, body)| format!("{} — {}\n{}", a.id, a.title, body))
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
-    // Step 2: ask Ollama to pick the single best KA ID from the ranked list
     let user_message = format!(
-        "A New York City resident says: \"{prompt}\"\n\n\
-         Here are the 20 most relevant NYC 311 knowledge articles:\n\
-         {articles}\n\n\
-         Reply with ONLY the single KA identifier (e.g. KA-03641) that best matches \
-         the resident's issue. No other text."
+        "Resident complaint: \"{prompt}\"\n\n\
+         {article_text}\n\n\
+         Reply with ONLY the single KA identifier that best matches the complaint. No other text."
     );
 
     let resp = client
@@ -191,8 +195,8 @@ async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<String> {
                 {
                     "role": "system",
                     "content": "You are a precise NYC 311 classifier. \
-                                When given a list of knowledge articles and a resident's issue, \
-                                you reply with exactly one KA identifier and nothing else."
+                                When given knowledge articles and a resident's complaint, \
+                                reply with exactly one KA identifier and nothing else."
                 },
                 { "role": "user", "content": user_message }
             ]
@@ -210,6 +214,44 @@ async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<String> {
         .as_str()
         .unwrap_or("")
         .to_string())
+}
+
+async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<String> {
+    // Fetch all article titles and extract search terms in parallel
+    let (articles_result, terms_result) = tokio::join!(
+        fetch_all_articles(client),
+        extract_search_terms(client, prompt)
+    );
+    let mut articles = articles_result?;
+    let terms = terms_result?;
+
+    // Keyword-rank articles using LLM-generated English terms
+    articles.sort_by_key(|a| {
+        let context = a.title.to_lowercase();
+        let score: usize = terms.iter().filter(|w| context.contains(w.as_str())).count();
+        Reverse(score)
+    });
+
+    let top: Vec<Article> = articles.into_iter().take(15).collect();
+
+    // Fetch bodies for top 15 concurrently
+    let handles: Vec<tokio::task::JoinHandle<String>> = top
+        .iter()
+        .map(|a| {
+            let c = client.clone();
+            let id = a.id.clone();
+            tokio::spawn(async move { fetch_article_body(&c, &id).await })
+        })
+        .collect();
+
+    let mut bodies: Vec<String> = Vec::with_capacity(handles.len());
+    for h in handles {
+        bodies.push(h.await.unwrap_or_default());
+    }
+
+    // LLM picks the single best from title + body
+    let enriched: Vec<(Article, String)> = top.into_iter().zip(bodies).collect();
+    select_best(client, prompt, &enriched).await
 }
 
 // --- Open article URL ---

@@ -8,9 +8,9 @@ brew install ollama
 ollama serve
 ```
 
-**Step 3 — Pull the model** (in a *new* terminal tab, ~2 GB download)
+**Step 3 — Pull the model** (in a *new* terminal tab, ~6 GB download)
 ```sh
-ollama pull llama3.2
+ollama pull llama3.1:8b
 ```
 
 **Step 4 — Run the tool**
