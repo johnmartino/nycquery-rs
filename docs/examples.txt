@@ -26,7 +26,7 @@ PRIMARY EXAMPLES
 
 MORE EXAMPLES
 1. 'there is a dead tree branch hanging over the sidewalk'
-2. 'my landlord hasn't provided heat for three days'
+2. "my landlord hasn't provided heat for three days"
 3. 'someone dumped a mattress on the street corner'
 4. 'there are rats in my building basement'
 5. 'the pothole on my block blew out my tire'
