@@ -1,15 +1,15 @@
-'the music next door is driving me crazy!'
-'pay parking fine'
-'my showers have been cold for a week'
+cargo run -q -- 'the music next door is driving me crazy!'
+cargo run -q -- 'pay parking fine'
+cargo run -q -- 'my showers have been cold for a week'
 
-'pothole'
-'pothole on Brooklyn Bridge'
-"there's a massive crater on my street"
+cargo run -q -- 'pothole'
+cargo run -q -- 'pothole on Brooklyn Bridge'
+cargo run -q -- "there's a massive crater on my street"
 
-'il mio vicino suona la musica toppo alto'
-'il y a du glace sur trottoir'
-'Hidrante contra incendios abierto todo el día'
+cargo run -q -- 'il mio vicino suona la musica toppo alto'
+cargo run -q -- 'il y a du glace sur trottoir'
+cargo run -q -- 'Hidrante contra incendios abierto todo el día'
+cargo run -q -- 'На улице отсутствует крышка люка'
 
-"graffiti"
-"graffiti on street signs"
-'someone spray painted signs on my street'
+cargo run -q -- "graffiti"
+cargo run -q -- 'someone spray painted signs on my street'

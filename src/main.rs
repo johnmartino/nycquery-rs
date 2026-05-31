@@ -124,6 +124,14 @@ async fn fetch_article_body(client: &Client, ka_id: &str) -> String {
     text.chars().take(600).collect()
 }
 
+fn looks_english(w: &str) -> bool {
+    w.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn is_near_exact(title: &str, complaint: &str) -> bool {
+    title == complaint || title.contains(complaint) || complaint.contains(title)
+}
+
 // --- Ollama API ---
 
 const OLLAMA_URL: &str = "http://localhost:11434/v1/chat/completions";
@@ -167,6 +175,33 @@ async fn extract_search_terms(client: &Client, prompt: &str) -> anyhow::Result<V
         .map(|s| s.to_lowercase())
         .filter(|s| s.len() > 2)
         .collect())
+}
+
+async fn translate_to_english(client: &Client, prompt: &str) -> String {
+    let Ok(resp) = client
+        .post(OLLAMA_URL)
+        .json(&json!({
+            "model": OLLAMA_MODEL,
+            "stream": false,
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Translate the following text to English. \
+                                If it is already in English, return it unchanged. \
+                                Return only the translation, no other text."
+                },
+                { "role": "user", "content": prompt }
+            ]
+        }))
+        .send()
+        .await else { return prompt.to_string() };
+    let Ok(json) = resp.json::<Value>().await else { return prompt.to_string() };
+    json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or(prompt)
+        .trim()
+        .to_string()
 }
 
 // Pick and rank the top 5 articles from title + body content
@@ -224,53 +259,74 @@ async fn select_best(
 }
 
 async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<Vec<(String, String)>> {
-    // Fetch all article titles and extract search terms in parallel
-    let (articles_result, terms_result) = tokio::join!(
+    let (articles_result, terms_result, translation) = tokio::join!(
         fetch_all_articles(client),
-        extract_search_terms(client, prompt)
+        extract_search_terms(client, prompt),
+        translate_to_english(client, prompt)
     );
     let mut articles = articles_result?;
-    let terms = terms_result?;
+    let mut terms = terms_result?;
 
-    // Keyword-rank articles using LLM-generated English terms
+    // Add raw keywords from the (possibly translated) complaint
+    for word in translation.split_whitespace() {
+        let w = word.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+        if w.len() > 2 && looks_english(&w) && !terms.contains(&w) {
+            terms.push(w);
+        }
+    }
+    eprintln!("[debug] search terms: {:?}", terms);
+
+    let complaint_lower = prompt.trim().to_lowercase();
+
+    // Near-exact title match sorts first; then by length-weighted keyword score
+    // (longer terms score higher naturally, so short function words weigh less)
     articles.sort_by_key(|a| {
-        let context = a.title.to_lowercase();
-        let score: usize = terms.iter().filter(|w| context.contains(w.as_str())).count();
-        Reverse(score)
+        let title = a.title.to_lowercase();
+        let near_exact = is_near_exact(&title, &complaint_lower);
+        let score: usize = terms.iter()
+            .filter(|w| title.contains(w.as_str()))
+            .map(|w| w.len())
+            .sum();
+        Reverse((near_exact as usize, score))
     });
 
     let top: Vec<Article> = articles.into_iter().take(15).collect();
 
-    // Fetch bodies for top 15 concurrently
-    let handles: Vec<tokio::task::JoinHandle<String>> = top
-        .iter()
-        .map(|a| {
-            let c = client.clone();
-            let id = a.id.clone();
-            tokio::spawn(async move { fetch_article_body(&c, &id).await })
-        })
-        .collect();
+    // Near-exact matches bypass the LLM — the title speaks for itself
+    let (exact, rest): (Vec<Article>, Vec<Article>) = top.into_iter().partition(|a| {
+        is_near_exact(&a.title.to_lowercase(), &complaint_lower)
+    });
 
-    let mut bodies: Vec<String> = Vec::with_capacity(handles.len());
-    for h in handles {
-        bodies.push(h.await.unwrap_or_default());
+    let mut results: Vec<(String, String)> =
+        exact.iter().map(|a| (a.id.clone(), a.title.clone())).collect();
+
+    let still_needed = 5usize.saturating_sub(results.len());
+    if still_needed > 0 && !rest.is_empty() {
+        let candidates: Vec<Article> = rest.into_iter().take(15 - exact.len()).collect();
+
+        let handles: Vec<tokio::task::JoinHandle<String>> = candidates
+            .iter()
+            .map(|a| {
+                let c = client.clone();
+                let id = a.id.clone();
+                tokio::spawn(async move { fetch_article_body(&c, &id).await })
+            })
+            .collect();
+
+        let mut bodies = Vec::with_capacity(handles.len());
+        for h in handles { bodies.push(h.await.unwrap_or_default()); }
+
+        let enriched: Vec<(Article, String)> = candidates.into_iter().zip(bodies).collect();
+        let title_map: HashMap<String, String> =
+            enriched.iter().map(|(a, _)| (a.id.clone(), a.title.clone())).collect();
+
+        let ids = select_best(client, prompt, &enriched).await?;
+        results.extend(ids.into_iter().take(still_needed).map(|id| {
+            (id.clone(), title_map.get(&id).cloned().unwrap_or_default())
+        }));
     }
 
-    // LLM ranks top 5 from title + body
-    let enriched: Vec<(Article, String)> = top.into_iter().zip(bodies).collect();
-    let title_map: HashMap<String, String> = enriched
-        .iter()
-        .map(|(a, _)| (a.id.clone(), a.title.clone()))
-        .collect();
-
-    let ids = select_best(client, prompt, &enriched).await?;
-    Ok(ids
-        .into_iter()
-        .map(|id| {
-            let title = title_map.get(&id).cloned().unwrap_or_default();
-            (id, title)
-        })
-        .collect())
+    Ok(results)
 }
 
 // --- Open article URL ---
