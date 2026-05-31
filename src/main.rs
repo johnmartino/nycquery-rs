@@ -112,13 +112,13 @@ async fn fetch_article_body(client: &Client, ka_id: &str) -> String {
     let Ok(resp) = client.get(&url).send().await else { return String::new() };
     let Ok(html) = resp.text().await else { return String::new() };
     let doc = Html::parse_document(&html);
-    let sel = Selector::parse("p").unwrap();
+    let sel = Selector::parse("p, li").unwrap();
     let text: String = doc
         .select(&sel)
         .map(|el| el.text().collect::<String>())
         .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|s| s.len() > 30)
-        .take(4)
+        .filter(|s| s.len() > 10)
+        .take(8)
         .collect::<Vec<_>>()
         .join(" ");
     text.chars().take(600).collect()
@@ -136,6 +136,7 @@ async fn extract_search_terms(client: &Client, prompt: &str) -> anyhow::Result<V
         .json(&json!({
             "model": OLLAMA_MODEL,
             "stream": false,
+            "temperature": 0,
             "messages": [
                 {
                     "role": "system",
