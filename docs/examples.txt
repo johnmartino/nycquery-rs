@@ -1,18 +1,6 @@
-cargo run -q -- -no-open 'the music next door is driving me crazy!'
-cargo run -q -- -no-open 'pay parking fine'
-cargo run -q -- -no-open 'my showers have been cold for a week'
-
-cargo run -q -- -no-open 'pothole'
-cargo run -q -- -no-open 'pothole on Brooklyn Bridge'
-cargo run -q -- -no-open "there's a massive crater on my street"
-
-cargo run -q -- -no-open 'il mio vicino suona la musica toppo alto'
-cargo run -q -- -no-open 'il y a du glace sur trottoir'
-cargo run -q -- -no-open 'Hidrante contra incendios abierto todo el día'
-cargo run -q -- -no-open 'На улице отсутствует крышка люка'
-
-cargo run -q -- -no-open "graffiti"
-cargo run -q -- -no-open 'someone spray painted signs on my street'
+COMMANDS
+nycquery [-no-open] [-list] [-debug] <prompt>
+cargo run -q -- [option list] <prompt>
 
 PRIMARY EXAMPLES
 1. 'the music next door is driving me crazy!'
