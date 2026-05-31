@@ -284,7 +284,8 @@ fn open_article(ka: &str) {
 
 fn usage(name: &str) -> ! {
     eprintln!(
-        "Usage:\n  {name} '<prompt>'\n  {name} --stdin\n\n\
+        "Usage:\n  {name} [-list] '<prompt>'\n  {name} [-list] --stdin\n\n\
+         -list   Print all 5 results (default: print only the top result)\n\n\
          Use single quotes so shell metacharacters like ! are not expanded.\n\
          Example: {name} 'There is loud banging coming from next door!'\n\
          Stdin:   printf '%s\\n' 'Loud music upstairs' | {name} --stdin"
@@ -303,12 +304,15 @@ async fn main() {
 
     let cli: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
 
-    let prompt: String = if cli == ["--stdin"] || cli == ["-"] {
+    let list_flag = cli.contains(&"-list");
+    let rest: Vec<&str> = cli.iter().copied().filter(|&s| s != "-list").collect();
+
+    let prompt: String = if rest == ["--stdin"] || rest == ["-"] {
         let mut buf = String::new();
         io::stdin().read_to_string(&mut buf).expect("failed to read stdin");
         buf.trim().to_string()
-    } else if cli.len() == 1 {
-        cli[0].to_string()
+    } else if rest.len() == 1 {
+        rest[0].to_string()
     } else {
         usage(&name)
     };
@@ -328,7 +332,12 @@ async fn main() {
                 eprintln!("No results found.");
                 std::process::exit(1);
             }
-            for (ka, title) in &results {
+            if list_flag {
+                for (ka, title) in &results {
+                    println!("{ka} — {title}");
+                }
+            } else {
+                let (ka, title) = &results[0];
                 println!("{ka} — {title}");
             }
             open_article(&results[0].0);
