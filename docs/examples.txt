@@ -14,7 +14,17 @@ cargo run -q -- -no-open 'На улице отсутствует крышка л
 cargo run -q -- -no-open "graffiti"
 cargo run -q -- -no-open 'someone spray painted signs on my street'
 
+PRIMARY EXAMPLES
+1. 'the music next door is driving me crazy!'
+2. 'pay parking fine'
+3. 'my showers have been cold for a week'
+4. 'pothole'
+5. 'pothole on Brooklyn Bridge'
+6. "there's a massive crater on my street"
+7. 'graffiti'
+8. 'someone spray painted signs on my street'
 
+MORE EXAMPLES
 1. 'there is a dead tree branch hanging over the sidewalk'
 2. 'my landlord hasn't provided heat for three days'
 3. 'someone dumped a mattress on the street corner'
@@ -25,3 +35,9 @@ cargo run -q -- -no-open 'someone spray painted signs on my street'
 8. 'my neighbor has not moved their car in weeks and it smells'
 9. 'there is black mold in my apartment and my landlord ignores me'
 10. 'a store near me is playing loud music outside until midnight'
+
+MULTI LANGUAGE
+1. 'il mio vicino suona la musica toppo alto'
+2. 'il y a du glace sur trottoir'
+3. 'Hidrante contra incendios abierto todo el día'
+4. 'На улице отсутствует крышка люка'
