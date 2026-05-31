@@ -14,3 +14,14 @@ Practical sizes for local use:
 
 Pull with:
 ollama pull deepseek-r1:8b
+
+
+
+What you'd need to change for real backend use
+
+1. Cache the article list in memory at startup and refresh periodically — eliminates the per-request scrape entirely
+2. Cache article bodies — they rarely change; a simple HashMap<String, String> keyed by KA ID works
+3. Wrap it in an HTTP server (e.g. axum) rather than calling it as a subprocess
+4. Accept Ollama's queue as a hard throughput ceiling — on a single machine with llama3.1:8b you're looking at maybe 3–6 requests/minute maximum, regardless of how the rest is optimized. A reasoning model like DeepSeek-R1 makes this worse, not better
+
+Realistic ceiling: with the caching fixes but a single Ollama instance, this handles light internal tooling well — a call center tool, a Slack bot, a low-traffic API. It is not suitable for public-facing traffic without either a request queue with backpressure or moving to a hosted LLM API (e.g. Claude or GPT-4o) that scales horizontally.
