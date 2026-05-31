@@ -1,0 +1,16 @@
+DeepSeek-R1 is the best free reasoning model on Ollama right now. It uses chain-of-thought — it "thinks" through a problem before answering, which is why it handles ambiguous classification much better than llama3.1.
+
+Practical sizes for local use:
+
+┌─────────────────┬─────────────┬─────────────────────────────┐
+│      Model      │ VRAM needed │            Notes            │
+├─────────────────┼─────────────┼─────────────────────────────┤
+│ deepseek-r1:8b  │ ~6 GB       │ Fastest, good quality       │
+├─────────────────┼─────────────┼─────────────────────────────┤
+│ deepseek-r1:14b │ ~10 GB      │ Noticeably better reasoning │
+├─────────────────┼─────────────┼─────────────────────────────┤
+│ deepseek-r1:32b │ ~20 GB      │ Near-frontier quality       │
+└─────────────────┴─────────────┴─────────────────────────────┘
+
+Pull with:
+ollama pull deepseek-r1:8b
