@@ -258,7 +258,7 @@ async fn select_best(
     Ok(ka_re.find_iter(&content).map(|m| m.as_str().to_string()).take(5).collect())
 }
 
-async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<Vec<(String, String)>> {
+async fn run_session(client: &Client, prompt: &str, debug: bool) -> anyhow::Result<Vec<(String, String)>> {
     let (articles_result, terms_result, translation) = tokio::join!(
         fetch_all_articles(client),
         extract_search_terms(client, prompt),
@@ -274,7 +274,7 @@ async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<Vec<(Strin
             terms.push(w);
         }
     }
-    eprintln!("[debug] search terms: {:?}", terms);
+    if debug { eprintln!("[debug] search terms: {:?}", terms); }
 
     let complaint_lower = prompt.trim().to_lowercase();
 
@@ -283,8 +283,12 @@ async fn run_session(client: &Client, prompt: &str) -> anyhow::Result<Vec<(Strin
     articles.sort_by_key(|a| {
         let title = a.title.to_lowercase();
         let near_exact = is_near_exact(&title, &complaint_lower);
+        let title_words: Vec<&str> = title
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
         let score: usize = terms.iter()
-            .filter(|w| title.contains(w.as_str()))
+            .filter(|w| title_words.contains(&w.as_str()))
             .map(|w| w.len())
             .sum();
         Reverse((near_exact as usize, score))
@@ -340,8 +344,10 @@ fn open_article(ka: &str) {
 
 fn usage(name: &str) -> ! {
     eprintln!(
-        "Usage:\n  {name} [-list] '<prompt>'\n  {name} [-list] --stdin\n\n\
-         -list   Print all 5 results (default: print only the top result)\n\n\
+        "Usage:\n  {name} [-list] [-no-open] [-debug] '<prompt>'\n  {name} [-list] [-no-open] [-debug] --stdin\n\n\
+         -list     Print all 5 results (default: print only the top result)\n\
+         -no-open  Do not open the result in the browser\n\
+         -debug    Print search terms used for keyword ranking\n\n\
          Use single quotes so shell metacharacters like ! are not expanded.\n\
          Example: {name} 'There is loud banging coming from next door!'\n\
          Stdin:   printf '%s\\n' 'Loud music upstairs' | {name} --stdin"
@@ -361,7 +367,9 @@ async fn main() {
     let cli: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
 
     let list_flag = cli.contains(&"-list");
-    let rest: Vec<&str> = cli.iter().copied().filter(|&s| s != "-list").collect();
+    let no_open_flag = cli.contains(&"-no-open");
+    let debug_flag = cli.contains(&"-debug");
+    let rest: Vec<&str> = cli.iter().copied().filter(|&s| !matches!(s, "-list" | "-no-open" | "-debug")).collect();
 
     let prompt: String = if rest == ["--stdin"] || rest == ["-"] {
         let mut buf = String::new();
@@ -381,7 +389,7 @@ async fn main() {
     let mut spinner = Spinner::new();
     spinner.start("Thinking");
 
-    match run_session(&client, &prompt).await {
+    match run_session(&client, &prompt, debug_flag).await {
         Ok(results) => {
             spinner.stop();
             if results.is_empty() {
@@ -396,7 +404,7 @@ async fn main() {
                 let (ka, title) = &results[0];
                 println!("{ka} — {title}");
             }
-            open_article(&results[0].0);
+            if !no_open_flag { open_article(&results[0].0); }
         }
         Err(e) => {
             spinner.stop();
