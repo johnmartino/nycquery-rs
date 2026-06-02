@@ -4,7 +4,7 @@ cargo run -q -- [option list] <prompt>
 
 PRIMARY EXAMPLES
 1. 'the music next door is driving me crazy!'
-2. 'pay parking fine'
+2. 'how can I pay my parking fine?'
 3. 'my showers have been cold for a week'
 4. 'pothole'
 5. 'pothole on Brooklyn Bridge'
@@ -24,7 +24,7 @@ MORE EXAMPLES
 9. 'there is black mold in my apartment and my landlord ignores me'
 10. 'a store near me is playing loud music outside until midnight'
 11. 'the trash can on the corner is overflowing'
-12. 'there is a soiled matress leaning against a tree on the sidewalk'
+12. 'there is a soiled mattress leaning against a tree on the sidewalk'
 
 MULTI LANGUAGE
 1. 'il mio vicino suona la musica toppo alto'
