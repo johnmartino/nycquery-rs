@@ -23,6 +23,7 @@ MORE EXAMPLES
 8. 'my neighbor has not moved their car in weeks and it smells'
 9. 'there is black mold in my apartment and my landlord ignores me'
 10. 'a store near me is playing loud music outside until midnight'
+11. 'the trash can on the corner is overflowing'
 
 MULTI LANGUAGE
 1. 'il mio vicino suona la musica toppo alto'
