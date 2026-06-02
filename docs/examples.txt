@@ -24,6 +24,7 @@ MORE EXAMPLES
 9. 'there is black mold in my apartment and my landlord ignores me'
 10. 'a store near me is playing loud music outside until midnight'
 11. 'the trash can on the corner is overflowing'
+12. 'there is a soiled matress leaning against a tree on the sidewalk'
 
 MULTI LANGUAGE
 1. 'il mio vicino suona la musica toppo alto'
