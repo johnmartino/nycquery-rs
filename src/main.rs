@@ -132,10 +132,17 @@ fn is_near_exact(title: &str, complaint: &str) -> bool {
     title == complaint || title.contains(complaint) || complaint.contains(title)
 }
 
+fn fmt_two_sig(x: f64) -> String {
+    if x == 0.0 { return "0.0".to_string(); }
+    let d = x.abs().log10().floor() as i32 + 1;
+    let decimals = (2 - d).max(0) as usize;
+    format!("{:.*}", decimals, x)
+}
+
 // --- Ollama API ---
 
 const OLLAMA_URL: &str = "http://localhost:11434/v1/chat/completions";
-const OLLAMA_MODEL: &str = "llava:7b"; // "llama3.1:8b";
+const OLLAMA_MODEL: &str = "llama3.1:8b";
 
 // Step 1: translate the complaint into English 311-style search terms
 async fn extract_search_terms(client: &Client, prompt: &str) -> anyhow::Result<Vec<String>> {
@@ -220,7 +227,8 @@ async fn select_best(
         "Resident complaint: \"{prompt}\"\n\n\
          {article_text}\n\n\
          Reply with ONLY the top 5 matches in the format 'KA-12345 score', best match first, \
-         one per line, where score is a numeric relevance score. No other text."
+         one per line, where score is a relevance score between 0 and 1.0 \
+         (1.0 = perfect match, 0 = unrelated). No other text."
     );
 
     let resp = client
@@ -235,7 +243,8 @@ async fn select_best(
                     "content": "You are a precise NYC 311 classifier. \
                                 When given knowledge articles and a resident's complaint, \
                                 reply with the top 5 matches ranked best match first, \
-                                one per line in the format 'KA-12345 score', nothing else."
+                                one per line in the format 'KA-12345 score', where score \
+                                is a number between 0 and 1.0. Nothing else."
                 },
                 { "role": "user", "content": user_message }
             ]
@@ -259,7 +268,7 @@ async fn select_best(
         .captures_iter(&content)
         .filter_map(|caps| {
             let id = caps.get(1)?.as_str().to_string();
-            let score = caps.get(2)?.as_str().parse::<f64>().ok()?;
+            let score = caps.get(2)?.as_str().parse::<f64>().ok()?.clamp(0.0, 1.0);
             Some((id, score))
         })
         .take(5)
@@ -406,11 +415,11 @@ async fn main() {
             }
             if list_flag {
                 for (ka, title, score) in &results {
-                    println!("{ka} — {title} — score: {:.0}", score);
+                    println!("{ka} — {title} — score: {}", fmt_two_sig(*score));
                 }
             } else {
                 let (ka, title, score) = &results[0];
-                println!("{ka} — {title} — score: {:.0}", score);
+                println!("{ka} — {title} — score: {}", fmt_two_sig(*score));
             }
             if !no_open_flag { open_article(&results[0].0); }
         }

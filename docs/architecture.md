@@ -15,8 +15,8 @@ nycquery [-list] [-no-open] [-debug] '<complaint>'
 nycquery [-list] [-no-open] [-debug] --stdin
 ```
 
-- Without `-list`: prints only the top result and opens it in the browser.
-- With `-list`: prints all 5 ranked results and opens the top result in the browser.
+- Without `-list`: prints only the top result (KA-id, title, score) and opens it in the browser.
+- With `-list`: prints all 5 ranked results with scores and opens the top result in the browser.
 - `-no-open`: suppresses opening the result in the browser.
 - `-debug`: prints the keyword search terms used for ranking to stderr.
 - `--stdin` (or `-`): reads the complaint from standard input instead of a command-line argument.
@@ -82,8 +82,9 @@ The program entry point. Handles argument parsing, starts the spinner, drives `r
 - Reads from stdin when `--stdin` or `-` is passed.
 
 **Output:**
-- Without `-list`: prints `KA-XXXXX — Title` for the top result only.
-- With `-list`: prints all five results in ranked order.
+- Without `-list`: prints `KA-XXXXX — Title — score: S` for the top result only.
+- With `-list`: prints all five results in ranked order, each with their score.
+- Scores are formatted to two significant figures via `fmt_two_sig`.
 - Opens the top result in the browser via `open_article` unless `-no-open` is set.
 - Passes the `debug` flag to `run_session` to enable search term logging.
 
@@ -92,19 +93,19 @@ The program entry point. Handles argument parsing, starts the spinner, drives `r
 ### `run_session`
 
 ```rust
-async fn run_session(client: &Client, prompt: &str, debug: bool) -> anyhow::Result<Vec<(String, String)>>
+async fn run_session(client: &Client, prompt: &str, debug: bool) -> anyhow::Result<Vec<(String, String, f64)>>
 ```
 
-Orchestrates the entire matching pipeline. Returns up to 5 `(KA-id, title)` pairs ranked best-first.
+Orchestrates the entire matching pipeline. Returns up to 5 `(KA-id, title, score)` triples ranked best-first, where score is in `[0.0, 1.0]`.
 
 **Steps:**
 1. Runs `fetch_all_articles`, `extract_search_terms`, and `translate_to_english` concurrently via `tokio::join!`.
 2. Merges LLM-generated search terms with English words extracted from the translated complaint (ASCII-alphabetic words only, length > 2).
-3. Sorts all articles by `(is_near_exact, score)` descending, where score is the sum of matched term lengths using word-boundary matching (longer, more specific terms outweigh short function words naturally).
+3. Sorts all articles by `(is_near_exact, score)` descending, where score is the sum of matched term lengths using word-boundary matching (longer, more specific terms outweigh short function words naturally). This keyword score is only used for candidate ranking — it is not the score returned in the final result.
 4. Takes the top 15 ranked articles.
-5. Partitions into near-exact title matches and the rest. Near-exact matches go directly into results — no LLM needed.
-6. If fewer than 5 results so far, spawns concurrent `tokio` tasks to fetch bodies for the remaining candidates, then calls `select_best`.
-7. Resolves KA IDs back to titles using a `HashMap` and returns the combined result.
+5. Partitions into near-exact title matches and the rest. Near-exact matches go directly into results with a score of `1.0` — no LLM needed.
+6. If fewer than 5 results so far, spawns concurrent `tokio` tasks to fetch bodies for the remaining candidates, then calls `select_best` to obtain the LLM-assigned `[0.0, 1.0]` relevance scores.
+7. Resolves KA IDs back to titles using a `HashMap` and returns the combined `(id, title, score)` triples.
 
 ---
 
@@ -210,7 +211,17 @@ Returns `true` if the article title and the complaint are close enough to be con
 - `title.contains(complaint)` — the complaint phrase appears inside the title
 - `complaint.contains(title)` — the title phrase appears inside the complaint (e.g. complaint "graffiti on the wall", title "Graffiti")
 
-Used in `run_session` both to sort near-exact articles to the top of the candidate list and to partition them out before the `select_best` LLM call.
+Used in `run_session` both to sort near-exact articles to the top of the candidate list and to partition them out before the `select_best` LLM call. Articles matched this way are assigned a fixed score of `1.0`.
+
+---
+
+### `fmt_two_sig`
+
+```rust
+fn fmt_two_sig(x: f64) -> String
+```
+
+Formats a float to two significant figures. Used by `main` for printing relevance scores. Examples: `1.0 → "1.0"`, `0.85 → "0.85"`, `0.123 → "0.12"`, `0.05 → "0.050"`. Uses `floor(log10(|x|)) + 1` to determine the decimal-place count needed for two significant digits, then defers to `format!("{:.*}", decimals, x)`. Returns `"0.0"` for an exact zero (avoiding `log10(0)`).
 
 ---
 
@@ -221,10 +232,10 @@ async fn select_best(
     client: &Client,
     prompt: &str,
     enriched: &[(Article, String)],
-) -> anyhow::Result<Vec<String>>
+) -> anyhow::Result<Vec<(String, f64)>>
 ```
 
-Sends the original complaint together with the non-exact-match candidate articles (title + body excerpt) to the LLM and asks it to pick and rank the top 5 matches. Only called when near-exact title matches have not already filled all 5 result slots.
+Sends the original complaint together with the non-exact-match candidate articles (title + body excerpt) to the LLM and asks it to pick, rank, and score the top 5 matches. Only called when near-exact title matches have not already filled all 5 result slots.
 
 **Input construction:**
 Each article is formatted as:
@@ -236,13 +247,14 @@ All articles are joined with blank lines and prepended with the complaint text.
 
 **LLM call:**
 - Temperature: `0`
-- System prompt instructs the model to return only KA identifiers, one per line, ranked best-first.
+- System prompt instructs the model to reply with lines in the format `KA-12345 score`, ranked best-first, where score is a relevance number between `0` and `1.0` (1.0 = perfect match, 0 = unrelated).
 
 **Post-processing:**
-- Applies the `KA-\d+` regex to the raw response text.
+- Applies the regex `(KA-\d+)\s+([0-9]+(?:\.[0-9]+)?)` to capture each `(id, score)` pair from the raw response text.
+- Parses the score as `f64` and clamps it to `[0.0, 1.0]` in case the model strays outside the requested range.
 - Takes at most 5 matches in the order they appear.
 
-Returns a `Vec<String>` of KA IDs. The caller (`run_session`) resolves each ID to its title.
+Returns a `Vec<(String, f64)>` of `(KA-id, score)` pairs. The caller (`run_session`) resolves each ID to its title.
 
 ---
 
