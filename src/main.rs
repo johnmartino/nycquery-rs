@@ -132,12 +132,6 @@ fn is_near_exact(title: &str, complaint: &str) -> bool {
     title == complaint || title.contains(complaint) || complaint.contains(title)
 }
 
-fn fmt_two_sig(x: f64) -> String {
-    if x == 0.0 { return "0.0".to_string(); }
-    let d = x.abs().log10().floor() as i32 + 1;
-    let decimals = (2 - d).max(0) as usize;
-    format!("{:.*}", decimals, x)
-}
 
 // --- Ollama API ---
 
@@ -216,7 +210,7 @@ async fn select_best(
     client: &Client,
     prompt: &str,
     enriched: &[(Article, String)],
-) -> anyhow::Result<Vec<(String, f64)>> {
+) -> anyhow::Result<Vec<String>> {
     let article_text = enriched
         .iter()
         .map(|(a, body)| format!("{} — {}\n{}", a.id, a.title, body))
@@ -226,9 +220,8 @@ async fn select_best(
     let user_message = format!(
         "Resident complaint: \"{prompt}\"\n\n\
          {article_text}\n\n\
-         Reply with ONLY the top 5 matches in the format 'KA-12345 score', best match first, \
-         one per line, where score is a relevance score between 0 and 1.0 \
-         (1.0 = perfect match, 0 = unrelated). No other text."
+         Reply with ONLY the top 5 KA identifiers that best match the complaint, best match first, \
+         one per line. No other text."
     );
 
     let resp = client
@@ -242,9 +235,8 @@ async fn select_best(
                     "role": "system",
                     "content": "You are a precise NYC 311 classifier. \
                                 When given knowledge articles and a resident's complaint, \
-                                reply with the top 5 matches ranked best match first, \
-                                one per line in the format 'KA-12345 score', where score \
-                                is a number between 0 and 1.0. Nothing else."
+                                reply with the top 5 KA identifiers ranked best match first, \
+                                one per line, nothing else."
                 },
                 { "role": "user", "content": user_message }
             ]
@@ -263,19 +255,11 @@ async fn select_best(
         .unwrap_or("")
         .to_string();
 
-    let line_re = Regex::new(r"(KA-\d+)\s+([0-9]+(?:\.[0-9]+)?)").unwrap();
-    Ok(line_re
-        .captures_iter(&content)
-        .filter_map(|caps| {
-            let id = caps.get(1)?.as_str().to_string();
-            let score = caps.get(2)?.as_str().parse::<f64>().ok()?.clamp(0.0, 1.0);
-            Some((id, score))
-        })
-        .take(5)
-        .collect())
+    let ka_re = Regex::new(r"KA-\d+").unwrap();
+    Ok(ka_re.find_iter(&content).map(|m| m.as_str().to_string()).take(5).collect())
 }
 
-async fn run_session(client: &Client, prompt: &str, debug: bool) -> anyhow::Result<Vec<(String, String, f64)>> {
+async fn run_session(client: &Client, prompt: &str, debug: bool) -> anyhow::Result<Vec<(String, String)>> {
     let (articles_result, terms_result, translation) = tokio::join!(
         fetch_all_articles(client),
         extract_search_terms(client, prompt),
@@ -318,8 +302,8 @@ async fn run_session(client: &Client, prompt: &str, debug: bool) -> anyhow::Resu
         is_near_exact(&a.title.to_lowercase(), &complaint_lower)
     });
 
-    let mut results: Vec<(String, String, f64)> =
-        exact.iter().map(|a| (a.id.clone(), a.title.clone(), 1.0)).collect();
+    let mut results: Vec<(String, String)> =
+        exact.iter().map(|a| (a.id.clone(), a.title.clone())).collect();
 
     let still_needed = 5usize.saturating_sub(results.len());
     if still_needed > 0 && !rest.is_empty() {
@@ -341,9 +325,9 @@ async fn run_session(client: &Client, prompt: &str, debug: bool) -> anyhow::Resu
         let title_map: HashMap<String, String> =
             enriched.iter().map(|(a, _)| (a.id.clone(), a.title.clone())).collect();
 
-        let ranked = select_best(client, prompt, &enriched).await?;
-        results.extend(ranked.into_iter().take(still_needed).map(|(id, score)| {
-            (id.clone(), title_map.get(&id).cloned().unwrap_or_default(), score)
+        let ids = select_best(client, prompt, &enriched).await?;
+        results.extend(ids.into_iter().take(still_needed).map(|id| {
+            (id.clone(), title_map.get(&id).cloned().unwrap_or_default())
         }));
     }
 
@@ -414,12 +398,12 @@ async fn main() {
                 std::process::exit(1);
             }
             if list_flag {
-                for (ka, title, score) in &results {
-                    println!("{ka} — {title} — score: {}", fmt_two_sig(*score));
+                for (ka, title) in &results {
+                    println!("{ka} — {title}");
                 }
             } else {
-                let (ka, title, score) = &results[0];
-                println!("{ka} — {title} — score: {}", fmt_two_sig(*score));
+                let (ka, title) = &results[0];
+                println!("{ka} — {title}");
             }
             if !no_open_flag { open_article(&results[0].0); }
         }
